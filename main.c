@@ -79,7 +79,7 @@ int main()
 
 
 #ifdef TEST_SEARCH
-    printf("key: %s, status(search): %d\t", data_sample.key, search_key(&data_sample));
+    printf("key: %s, status(search): %d,\t", data_sample.key, search_key(&data_sample));
 
     switch (data_sample.type)
     {
@@ -158,7 +158,7 @@ static int generate_data()
     return SUCCESS;
 }
 
-static void find_key(info* data, bool add)
+static void find_key(info* data, bool add)	//search_key(dic* data)
 {
     int index = hash_BKDR(data->key);
     sprintf(data->file_name, "%s/%d%s", FOLDER, index, ".txt");
@@ -268,22 +268,27 @@ static int insert_table(char* key, void* val, short val_size, char type)
         curr_ptr += sizeof(short) + sizeof(char) + val_size_temp;
         memmove(curr_ptr_new, curr_ptr, 
                 fsize_new - (int)(curr_ptr_new - file_buf_new));    //從該value後方到最後
-
         fclose(data.fptr);
 
-        FILE* fptr = fopen(data.file_name, "w+");
+        char file_name_temp[NAME_SIZE];
+        sprintf(file_name_temp, "%s/temp%s", FOLDER, ".txt");
+
+        FILE* fptr = fopen(file_name_temp, "w+");
         if (!fptr)
         {
             free(data.file_buf);
             return ERR_OPEN_FAIL;
         }
+
         if (fwrite(file_buf_new, fsize_new, 1, fptr) != 1)
         {
             free(data.file_buf);
             return ERR_SAVE_FAIL;
         }
-        fclose(fptr);
 
+        rename(file_name_temp, data.file_name);
+
+        fclose(fptr);
         free(file_buf_new);
         free(data.file_buf);   //記得
 
