@@ -20,7 +20,7 @@
 #define ERR_MALLOC_FAIL BASE - 8
 #define NOT_FOUND BASE - 9
 #define BUF_SIZE 12
-#define NAME_SIZE 50
+#define NAME_SIZE (strlen(FOLDER) + 20)
 #define KEY_MAX_SIZE 255
 #define VAL_MAX_SIZE 4096
 #define DATA_SIZE 10000000
@@ -41,29 +41,19 @@ typedef struct dic
     char type;
 }dic;
 
-typedef struct info
-{
-    char* key;
-    char file_name[NAME_SIZE];
-    int fsize;
-    char* file_buf; //需要 free
-    char* target_ptr;
-    int error_code;
-    FILE* fptr;
-}info;
-
-
 static int hash_BKDR(char*);
-static void find_key(info*, bool);
 static int insert_table(char*, void*, short, char);
 static int search_key(dic*);
 static int delete_key(char*);
 static int generate_data();
+static void find_file(char*, char*);
+static int overwrite(char*, int, char*);
+static char* find_key(char*, char*, int, FILE*);
 
 
 int main()
 {
-    dic data_sample = { .key = "key2094" };
+    dic data_sample = { .key = "key136" };
     char* key_sample = data_sample.key;
 
 
@@ -79,18 +69,18 @@ int main()
 
 
 #ifdef TEST_SEARCH
-    printf("key: %s, status(search): %d,\t", data_sample.key, search_key(&data_sample));
+    printf("key: %s, status(search): %d", data_sample.key, search_key(&data_sample));
 
     switch (data_sample.type)
     {
     case 'I':
-        printf("val: %d\n", *(short*)data_sample.val);
+        printf(",\tval: %d\n", *(short*)data_sample.val);
         break;
     case 'S':
-        printf("val: %s\n", data_sample.val);
+        printf(",\tval: %s\n", data_sample.val);
         break;
     case 'B':
-        printf("val: ");
+        printf(",\tval: ");
         for (short i = 0; i < data_sample.val_size; i++)
             printf("%c", data_sample.val[i]);
         printf("\n");
@@ -135,7 +125,7 @@ static int generate_data()
 
     clock_t start = clock();
 
-    int scale = DATA_SIZE / 10;
+    int scale = DATA_SIZE > 10 ? DATA_SIZE / 10 : 1;
     printf("Complete:\n");
 
     for (int i = 1; i <= DATA_SIZE; i++)
@@ -153,58 +143,15 @@ static int generate_data()
     printf("\n"); 
 
     clock_t end = clock();
-    printf("time = %lf\n", (end - start)/(double)(CLOCKS_PER_SEC));
+    printf("Time cost: %lf sec\n", (end - start)/(double)(CLOCKS_PER_SEC));
 
     return SUCCESS;
 }
 
-static void find_key(info* data, bool add)	//search_key(dic* data)
+static void find_file(char* key, char* file_name)
 {
-    int index = hash_BKDR(data->key);
-    sprintf(data->file_name, "%s/%d%s", FOLDER, index, ".txt");
-    if (add)
-        data->fptr = fopen(data->file_name, "a+");
-    else
-        data->fptr = fopen(data->file_name, "r");
-	
-	if (data->fptr)
-    {
-        struct stat fstat;
-        stat(data->file_name, &fstat);
-        data->fsize = fstat.st_size;
-
-        if (data->fsize)
-        {
-            data->file_buf = malloc(data->fsize);
-            if (data->file_buf == NULL)
-                data->error_code = ERR_MALLOC_FAIL;
-
-            if (fread(data->file_buf, data->fsize, 1, data->fptr) != 1)
-                data->error_code = ERR_LOAD_FAIL;
-
-            char* curr_ptr = data->file_buf;
-
-            while (curr_ptr < data->file_buf + data->fsize)
-            {
-                if (strcmp(curr_ptr, data->key) == 0)
-                {
-                    data->target_ptr = curr_ptr;
-                    return;
-			    }
-	            else
-                {
-                    curr_ptr += strlen(curr_ptr) + 1;
-                    curr_ptr += sizeof(short) + sizeof(char) + *(short*)(curr_ptr) + 1;
-                }
-		    }
-            free(data->file_buf);
-            return;
-        }
-        else if (add == false)      //查找和刪除
-            data->error_code = NOT_FOUND;
-    }
-    else
-        data->error_code = errno;
+    int index = hash_BKDR(key);
+    sprintf(file_name, "%s/%d%s", FOLDER, index, ".txt");
 }
 
 static int insert_table(char* key, void* val, short val_size, char type)
@@ -227,175 +174,231 @@ static int insert_table(char* key, void* val, short val_size, char type)
         return ERR_TYPE;
     }
 
-    info data = { .key = key };
-    find_key(&data, true);
-    if (data.error_code)
-        return data.error_code;        
+    char file_name[NAME_SIZE];
+    find_file(key, file_name);
 
-    if (data.target_ptr)
+    FILE* fptr = fopen(file_name, "a+");
+    if (!fptr)
+        return ERR_OPEN_FAIL;
+	
+	struct stat fstat;
+    stat(file_name, &fstat);
+    int fsize = fstat.st_size;
+
+    if (fsize)
     {
-        char* curr_ptr = data.target_ptr;
-
-        curr_ptr += strlen(curr_ptr) + 1;
-        short val_size_temp = *(short*)(curr_ptr);
-        if (val_size_temp <= 0)
-        {
-            free(data.file_buf);
-            return ERR_TYPE_SIZE;
-        }
-        int fsize_new = data.fsize - val_size_temp + val_size;
-        char* file_buf_new = (char*)malloc(fsize_new);
-        if (file_buf_new == NULL)
-        {
-            free(data.file_buf);
+        char* file_buf = malloc(fsize);
+        if (file_buf == NULL)
             return ERR_MALLOC_FAIL;
-        }
-        char* curr_ptr_new = file_buf_new;
-
-        int target_loc = curr_ptr - data.file_buf;   // val_len 開頭位置
-        memmove(curr_ptr_new, data.file_buf, target_loc);
-
-        curr_ptr_new += target_loc;
-        *(short*)(curr_ptr_new) = val_size;
-
-        curr_ptr_new += sizeof(short);
-        *curr_ptr_new = type;
-
-        curr_ptr_new += sizeof(char);
-        memmove(curr_ptr_new, val, val_size);     //新value
-
-        curr_ptr_new += val_size;
-        curr_ptr += sizeof(short) + sizeof(char) + val_size_temp;
-        memmove(curr_ptr_new, curr_ptr, 
-                fsize_new - (int)(curr_ptr_new - file_buf_new));    //從該value後方到最後
-        fclose(data.fptr);
-
-        char file_name_temp[NAME_SIZE];
-        sprintf(file_name_temp, "%s/temp%s", FOLDER, ".txt");
-
-        FILE* fptr = fopen(file_name_temp, "w+");
-        if (!fptr)
+        if (fread(file_buf, fsize, 1, fptr) != 1)
         {
-            free(data.file_buf);
-            return ERR_OPEN_FAIL;
+            free(file_buf);
+            return ERR_LOAD_FAIL;
         }
 
-        if (fwrite(file_buf_new, fsize_new, 1, fptr) != 1)
+        char* target_ptr = find_key(key, file_buf, fsize, fptr);
+        if (target_ptr)
         {
-            free(data.file_buf);
-            return ERR_SAVE_FAIL;
+            fclose(fptr);
+
+            target_ptr += strlen(target_ptr) + 1;
+            short val_size_temp = *(short*)(target_ptr);
+
+            int fsize_new = fsize - val_size_temp + val_size;
+            char* file_buf_new = (char*)malloc(fsize_new);
+
+            char* target_ptr_new = file_buf_new;
+
+            int target_loc = target_ptr - file_buf;
+            memmove(target_ptr_new, file_buf, target_loc);
+
+            target_ptr_new += target_loc;
+            *(short*)(target_ptr_new) = val_size;
+
+            target_ptr_new += sizeof(short);
+            *target_ptr_new = type;
+
+            target_ptr_new += sizeof(char);
+            memmove(target_ptr_new, val, val_size);
+
+            target_ptr_new += val_size;
+            target_ptr += sizeof(short) + sizeof(char) + val_size_temp;
+            memmove(target_ptr_new, target_ptr, 
+                    fsize_new - (int)(target_ptr_new - file_buf_new));
+
+            free(file_buf);
+            int error = overwrite(file_buf_new, fsize_new, file_name);
+            free(file_buf_new);
+            if(error)
+                return error;
+
+            return SUCCESS;
         }
-
-        rename(file_name_temp, data.file_name);
-
-        fclose(fptr);
-        free(file_buf_new);
-        free(data.file_buf);   //記得
-
-        return SUCCESS;
+        free(file_buf);
     }
 
-    if (fwrite(key, strlen(key) + 1, 1, data.fptr) != 1)
+    if (fwrite(key, strlen(key) + 1, 1, fptr) != 1)
         return ERR_SAVE_FAIL;
 
-    if (fwrite(&val_size, sizeof(short), 1, data.fptr) != 1)
+    if (fwrite(&val_size, sizeof(short), 1, fptr) != 1)
         return ERR_SAVE_FAIL;
 
-    if (fprintf(data.fptr, "%c", type) < 0)
+    if (fprintf(fptr, "%c", type) < 0)
         return errno;
 
-    if (fwrite(val, val_size, 1, data.fptr) != 1)
+    if (fwrite(val, val_size, 1, fptr) != 1)
         return ERR_SAVE_FAIL;
 
 #ifdef LINUX_SYSTEM
-    fprintf(data.fptr, "%c", '\n');
+    fprintf(fptr, "%c", '\n');
 #else
-    fprintf(data.fptr, "%c", '\t');
+    fprintf(fptr, "%c", '\t');
 #endif
 
-    fclose(data.fptr);
+    fclose(fptr);
+
     return SUCCESS;
 }
 
-static int search_key(dic* request)
+static int overwrite(char* file_buf_new, int fsize_new, char* file_name)
 {
-    info data = { .key = request->key };
-    find_key(&data, false);
-    if (data.error_code)
-        return data.error_code;
+    char file_name_temp[NAME_SIZE];
+    sprintf(file_name_temp, "%s/temp%s", FOLDER, ".txt");
+    FILE* fptr = fopen(file_name_temp, "w+");
+    if (!fptr)
+        return ERR_OPEN_FAIL;
 
-    if (data.target_ptr)
+    if (fwrite(file_buf_new, fsize_new, 1, fptr) != 1)
+        return ERR_SAVE_FAIL;
+
+    if (rename(file_name_temp, file_name))
+        return errno;
+
+    fclose(fptr);
+    return SUCCESS;
+}
+
+static char* find_key(char* key, char* file_buf, int fsize, FILE* fptr)
+{
+    char* curr_ptr = file_buf;
+
+    while (curr_ptr < file_buf + fsize)
     {
-        char* curr_ptr = data.target_ptr;
-        curr_ptr += strlen(curr_ptr) + 1;
-        request->val_size = *(short*)(curr_ptr);
-        curr_ptr += sizeof(short);
-        request->type = *curr_ptr++;
-        memmove(request->val, curr_ptr, request->val_size);
-        free(data.file_buf);   //記得
+        if (strcmp(curr_ptr, key) == 0)
+            return curr_ptr;
+        else
+        {
+            curr_ptr += strlen(curr_ptr) + 1;
+            curr_ptr += sizeof(short) + sizeof(char) + *(short*)(curr_ptr) + 1;
+        }
+    }
+    return NULL;
+}
+
+static int search_key(dic* data)
+{
+    char file_name[NAME_SIZE];
+    find_file(data->key, file_name);
+
+    struct stat fstat;
+    stat(file_name, &fstat);
+    int fsize = fstat.st_size;
+    if (fsize <= 0)
+        return NOT_FOUND;
+
+    FILE* fptr = fopen(file_name, "r");
+    if (!fptr)
+        return ERR_OPEN_FAIL;
+
+    char* file_buf = malloc(fsize);
+    if (file_buf == NULL)
+        return ERR_MALLOC_FAIL;
+    if (fread(file_buf, fsize, 1, fptr) != 1)
+    {
+        free(file_buf);
+        return ERR_LOAD_FAIL;
+    }
+
+    char* target_ptr = find_key(data->key, file_buf, fsize, fptr);
+    if (target_ptr)
+    {
+        target_ptr += strlen(target_ptr) + 1;
+        data->val_size = *(short*)(target_ptr);
+        target_ptr += sizeof(short);
+        data->type = *target_ptr++;
+        memmove(data->val, target_ptr, data->val_size);
+        free(file_buf);
+
         return SUCCESS;
     }
-    else
-        return NOT_FOUND;
+    free(file_buf);
+
+    return NOT_FOUND;
 }
 
 static int delete_key(char* key)
 {
-    info data = { .key = key };
-    find_key(&data, false);
+    char file_name[NAME_SIZE];
+    find_file(key, file_name);
 
-    if (data.target_ptr)
+    struct stat fstat;
+    stat(file_name, &fstat);
+    int fsize = fstat.st_size;
+    if (fsize <= 0)
+        return NOT_FOUND;
+
+    FILE* fptr = fopen(file_name, "r");
+    if (!fptr)
+        return ERR_OPEN_FAIL;
+
+    char* file_buf = malloc(fsize);
+    if (file_buf == NULL)
+        return ERR_MALLOC_FAIL;
+    if (fread(file_buf, fsize, 1, fptr) != 1)
     {
-        char* curr_ptr = data.target_ptr;
+        free(file_buf);
+        return ERR_LOAD_FAIL;
+    }
 
-        int target_loc = curr_ptr - data.file_buf;   //紀錄目標 key 開頭位置
-        curr_ptr += strlen(curr_ptr) + 1;
-        short val_size_temp = *(short*)(curr_ptr);
+    char* target_ptr = find_key(key, file_buf, fsize, fptr);
+    if (target_ptr)
+    {
+        fclose(fptr);
+        
+        int target_loc = target_ptr - file_buf;
+        target_ptr += strlen(target_ptr) + 1;
+        short val_size_temp = *(short*)(target_ptr);
         if (val_size_temp <= 0)
         {
-            free(data.file_buf);
+            free(file_buf);
             return ERR_TYPE_SIZE;
         }
 
-        curr_ptr += sizeof(short) + sizeof(char) + val_size_temp + 1;
-        int target_size = curr_ptr - (data.file_buf + target_loc);
+        target_ptr += sizeof(short) + sizeof(char) + val_size_temp + 1;
+        int target_size = target_ptr - (file_buf + target_loc);
 
-        int fsize_new = data.fsize - target_size;
+        int fsize_new = fsize - target_size;
         char* file_buf_new = (char*)malloc(fsize_new);
         if (file_buf_new == NULL)
         {
-            free(data.file_buf);
-            return ERR_MALLOC_FAIL;
-        }
-        memmove(file_buf_new, data.file_buf, target_loc);    //從頭到該 key 的 val_len
-        memmove(file_buf_new + target_loc, curr_ptr, fsize_new - target_loc);
-        fclose(data.fptr);
-
-        char file_name_temp[NAME_SIZE];
-        sprintf(file_name_temp, "%s/temp%s", FOLDER, ".txt");
-
-        FILE* fptr = fopen(file_name_temp, "w+");
-        if (!fptr)
-        {
-            free(data.file_buf);
-            return ERR_OPEN_FAIL;
+            free(file_buf);
+            return ERR_TYPE_SIZE;
         }
 
-        if (fwrite(file_buf_new, fsize_new, 1, fptr) != 1)
-        {
-            free(data.file_buf);
-            return ERR_SAVE_FAIL;
-        }
+        memmove(file_buf_new, file_buf, target_loc);    //從頭到該 key 的 val_len
+        memmove(file_buf_new + target_loc, target_ptr, fsize_new - target_loc);
 
-        rename(file_name_temp, data.file_name);
-
-        fclose(fptr);
+        free(file_buf);
+        int error = overwrite(file_buf_new, fsize_new, file_name);
         free(file_buf_new);
-        free(data.file_buf);
-
+        if(error)
+            return error;
+        
         return SUCCESS;
     }
-    else
-        return NOT_FOUND;
+
+    free(file_buf);
+
+    return NOT_FOUND;
 }
 
